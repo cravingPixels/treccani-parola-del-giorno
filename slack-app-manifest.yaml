@@ -1,0 +1,23 @@
+# Slack app manifest — create the app in one click at:
+#   https://api.slack.com/apps  →  "Create New App"  →  "From an app manifest"
+# Only an Incoming Webhook is needed (the daily post). No bot, no slash command,
+# no public backend. After creating, enable Incoming Webhooks, "Add New Webhook
+# to Workspace", pick a channel, and copy the URL into the repo secret
+# SLACK_WEBHOOK_URL. Installing into a restricted (corporate) workspace still
+# requires a Workspace Owner / app-manager to approve.
+display_information:
+  name: Parola del giorno
+  description: Posts Treccani's word of the day to a channel each morning.
+  background_color: "#7a1f1f"
+features:
+  bot_user:
+    display_name: parola-del-giorno
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - incoming-webhook
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

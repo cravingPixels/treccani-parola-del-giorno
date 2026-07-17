@@ -1,0 +1,53 @@
+name: Parola del giorno
+
+on:
+  schedule:
+    # Cron is UTC and best-effort. 9am Italy = 07:00 UTC (CEST) or 08:00 UTC (CET).
+    # We fire at both; scrape.py's Europe/Rome guard lets exactly one do real work.
+    # Minute :17 avoids the top-of-hour scheduling spike.
+    - cron: "17 7 * * *"
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Ignore the 9am Europe/Rome guard (for manual runs)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: parola-del-giorno
+  cancel-in-progress: false
+
+jobs:
+  word-of-day:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r scraper/requirements.txt
+
+      - name: Scrape, store and post
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python scraper/scrape.py ${{ (github.event_name == 'workflow_dispatch' && inputs.force) && '--force' || '' }}
+
+      - name: Commit word if changed
+        run: |
+          if [ -n "$(git status --porcelain docs/data/words.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/data/words.json
+            git commit -m "chore: parola del giorno $(date -u +%F)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          else
+            echo "No change to words.json; nothing to commit."
+          fi

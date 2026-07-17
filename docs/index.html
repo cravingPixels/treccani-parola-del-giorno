@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Parola del giorno — storico</title>
+  <style>
+    :root { --bg: #fffdf7; --fg: #1a1a1a; --muted: #6b6b6b; --accent: #7a1f1f; --line: #e6e0d4; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #16130f; --fg: #eee7d8; --muted: #a59d8c; --accent: #e0a35a; --line: #332d24; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: var(--bg); color: var(--fg); }
+    header { padding: 2rem 1rem 1rem; text-align: center; border-bottom: 1px solid var(--line); }
+    h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.5px; }
+    p.sub { margin: .4rem 0 0; color: var(--muted); font-size: .9rem; }
+    main { max-width: 720px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
+    input[type="search"] { width: 100%; padding: .7rem .9rem; font-size: 1rem; border: 1px solid var(--line);
+      border-radius: 10px; background: transparent; color: var(--fg); margin-bottom: 1.25rem; }
+    .entry { padding: 1rem 0; border-bottom: 1px solid var(--line); }
+    .date { font-size: .78rem; color: var(--muted); font-family: system-ui, sans-serif; }
+    .word { font-size: 1.4rem; margin: .15rem 0 .35rem; }
+    .word a { color: var(--accent); text-decoration: none; }
+    .word a:hover { text-decoration: underline; }
+    .def { color: var(--fg); font-size: .98rem; line-height: 1.5; opacity: .88; }
+    .empty { color: var(--muted); text-align: center; padding: 2rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📖 Parola del giorno</h1>
+    <p class="sub">Storico delle parole del giorno di Treccani</p>
+  </header>
+  <main>
+    <input type="search" id="q" placeholder="Cerca una parola o una data (es. 2026-07)…" autocomplete="off" />
+    <div id="list"><p class="empty">Caricamento…</p></div>
+  </main>
+  <script>
+    const listEl = document.getElementById("q");
+    let entries = [];
+
+    function render(filter) {
+      const out = document.getElementById("list");
+      const f = (filter || "").trim().toLowerCase();
+      const rows = entries
+        .filter(e => !f || e.word.toLowerCase().includes(f) || e.date.includes(f) || (e.definition || "").toLowerCase().includes(f))
+        .sort((a, b) => b.date.localeCompare(a.date));
+      if (!rows.length) { out.innerHTML = '<p class="empty">Nessun risultato.</p>'; return; }
+      out.innerHTML = rows.map(e => `
+        <div class="entry">
+          <div class="date">${e.date}</div>
+          <div class="word"><a href="${e.url}" target="_blank" rel="noopener">${e.word}</a></div>
+          ${e.definition ? `<div class="def">${e.definition}</div>` : ""}
+        </div>`).join("");
+    }
+
+    document.getElementById("q").addEventListener("input", ev => render(ev.target.value));
+
+    fetch("data/words.json")
+      .then(r => r.json())
+      .then(d => { entries = d.words || []; render(""); })
+      .catch(() => { document.getElementById("list").innerHTML = '<p class="empty">Impossibile caricare lo storico.</p>'; });
+  </script>
+</body>
+</html>
