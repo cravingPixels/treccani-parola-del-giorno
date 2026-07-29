@@ -2,15 +2,16 @@ name: Parola del giorno
 
 on:
   schedule:
-    # Cron is UTC and best-effort. 9am Italy = 07:00 UTC (CEST) or 08:00 UTC (CET).
-    # We fire at both; scrape.py's Europe/Rome guard lets exactly one do real work.
-    # Minute :17 avoids the top-of-hour scheduling spike.
-    - cron: "17 7 * * *"
-    - cron: "17 8 * * *"
+    # Cron is UTC and best-effort. We don't know when Treccani flips the word, so
+    # we attempt every 30 min through the morning. 03:00-11:00 UTC covers roughly
+    # 05:00-13:00 Europe/Rome across CET/CEST. scrape.py captures a word only when
+    # it is genuinely new, and posts once at/after POST_HOUR (default 9) — so the
+    # many attempts self-dedupe and a late Treccani update is still caught.
+    - cron: "*/30 3-11 * * *"
   workflow_dispatch:
     inputs:
       force:
-        description: "Ignore the 9am Europe/Rome guard (for manual runs)"
+        description: "Post now, ignoring the POST_HOUR gate (for manual runs)"
         type: boolean
         default: true
 
@@ -37,6 +38,7 @@ jobs:
       - name: Scrape, store and post
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          POST_HOUR: ${{ vars.POST_HOUR || '9' }}
         run: python scraper/scrape.py ${{ (github.event_name == 'workflow_dispatch' && inputs.force) && '--force' || '' }}
 
       - name: Commit word if changed

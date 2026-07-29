@@ -28,7 +28,7 @@ HOME_URL = "https://www.treccani.it/"
 BASE_URL = "https://www.treccani.it"
 LABEL_TEXT = "Parola del giorno"
 ROME = ZoneInfo("Europe/Rome")
-TARGET_LOCAL_HOUR = 9
+DEFAULT_POST_HOUR = 9
 
 # Honest, identifiable User-Agent (good-faith scraping; Treccani logs spoofed UAs).
 USER_AGENT = (
@@ -166,22 +166,40 @@ def post_to_slack(webhook_url: str, payload: dict, timeout: int = 15) -> None:
         raise ScrapeError(f"Slack webhook returned HTTP {resp.status_code}: {resp.text}")
 
 
-def should_run_now(now: datetime | None = None) -> bool:
+def latest_stored_word(store: dict) -> str | None:
+    """The most recently dated word already in the archive, or None if empty."""
+    if not store["words"]:
+        return None
+    return max(store["words"], key=lambda w: w["date"])["word"]
+
+
+def entry_from_dict(d: dict) -> WordOfDay:
+    return WordOfDay(
+        date=d["date"], word=d["word"], slug=d["slug"], url=d["url"],
+        definition=d.get("definition"),
+    )
+
+
+def should_post(now: datetime, post_hour: int, has_today_word: bool,
+                last_posted_date: str | None, force: bool = False) -> bool:
+    """Post at most once per day, at/after post_hour, only if a fresh word exists.
+
+    The morning schedule fires many times; this gate ensures exactly one post.
+    """
+    if not has_today_word:
+        return False
+    if last_posted_date == now.strftime("%Y-%m-%d"):
+        return False
+    return force or now.hour >= post_hour
+
+
+def run(webhook_url: str | None, dry_run: bool, force: bool,
+        post_hour: int = DEFAULT_POST_HOUR, now: datetime | None = None) -> int:
     now = now or datetime.now(ROME)
-    return now.hour == TARGET_LOCAL_HOUR
+    today = now.strftime("%Y-%m-%d")
 
-
-def run(webhook_url: str | None, dry_run: bool, force: bool) -> int:
-    if not force and not should_run_now():
-        print(f"Not the {TARGET_LOCAL_HOUR}:00 Europe/Rome slot; skipping.")
-        return 0
-
-    today = datetime.now(ROME).strftime("%Y-%m-%d")
     try:
         word, slug = parse_word_of_day(fetch(HOME_URL))
-        url = f"{BASE_URL}/vocabolario/{slug}/"
-        definition = parse_definition(fetch(url))
-        entry = WordOfDay(date=today, word=word, slug=slug, url=url, definition=definition)
     except ScrapeError as err:
         print(f"SCRAPE FAILED: {err}", file=sys.stderr)
         if webhook_url and not dry_run:
@@ -189,17 +207,43 @@ def run(webhook_url: str | None, dry_run: bool, force: bool) -> int:
         return 1
 
     store = load_store(DATA_FILE)
-    added = upsert_word(store, entry)
-    save_store(store, DATA_FILE)
-    print(f"Word: {entry.word} ({entry.url}) — {'stored' if added else 'already stored'}")
 
-    payload = build_blocks(entry)
-    if dry_run or not webhook_url:
-        print("DRY-RUN — Slack payload:")
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if dry_run:
+        url = f"{BASE_URL}/vocabolario/{slug}/"
+        entry = WordOfDay(today, word, slug, url, parse_definition(fetch(url)))
+        print(f"[dry-run] current word: {word} (new={word != latest_stored_word(store)})")
+        print(json.dumps(build_blocks(entry), ensure_ascii=False, indent=2))
+        return 0
+
+    # --- Capture: store a genuinely new word (differs from the last stored one). ---
+    if word != latest_stored_word(store):
+        url = f"{BASE_URL}/vocabolario/{slug}/"
+        entry = WordOfDay(today, word, slug, url, parse_definition(fetch(url)))
+        if upsert_word(store, entry):
+            save_store(store, DATA_FILE)
+            print(f"Captured new word '{word}' for {today}.")
     else:
-        post_to_slack(webhook_url, payload)
-        print("Posted to Slack.")
+        print(f"No new word yet (Treccani still shows '{word}').")
+
+    # --- Notify: post today's word once, at/after POST_HOUR (Europe/Rome). ---
+    today_entry = next((w for w in store["words"] if w["date"] == today), None)
+    if not webhook_url:
+        print("No SLACK_WEBHOOK_URL set; capture done, skipping Slack post.")
+        return 0
+
+    if should_post(now, post_hour, today_entry is not None, store.get("last_posted_date"), force):
+        post_to_slack(webhook_url, build_blocks(entry_from_dict(today_entry)))
+        store["last_posted_date"] = today
+        save_store(store, DATA_FILE)
+        print(f"Posted '{today_entry['word']}' to Slack.")
+    else:
+        if store.get("last_posted_date") == today:
+            reason = "already posted today"
+        elif today_entry is None:
+            reason = "no fresh word captured yet"
+        else:
+            reason = f"before {post_hour}:00 Europe/Rome"
+        print(f"Not posting ({reason}).")
     return 0
 
 
@@ -207,10 +251,11 @@ def main(argv: list[str] | None = None) -> int:
     import os
 
     parser = argparse.ArgumentParser(description="Treccani parola del giorno → Slack")
-    parser.add_argument("--dry-run", action="store_true", help="print payload, do not post")
-    parser.add_argument("--force", action="store_true", help="ignore the 9am Europe/Rome guard")
+    parser.add_argument("--dry-run", action="store_true", help="preview payload; no writes, no post")
+    parser.add_argument("--force", action="store_true", help="post now, ignoring the POST_HOUR gate")
     args = parser.parse_args(argv)
-    return run(os.environ.get("SLACK_WEBHOOK_URL"), args.dry_run, args.force)
+    post_hour = int(os.environ.get("POST_HOUR", DEFAULT_POST_HOUR))
+    return run(os.environ.get("SLACK_WEBHOOK_URL"), args.dry_run, args.force, post_hour)
 
 
 if __name__ == "__main__":
