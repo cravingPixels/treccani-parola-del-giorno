@@ -1,0 +1,9 @@
+name = "treccani-parola-del-giorno"
+main = "src/index.mjs"
+compatibility_date = "2026-07-01"
+
+# The public archive the slash command reads. Override in the dashboard if the repo
+# owner/name changes. The signing secret is set with:
+#   wrangler secret put SLACK_SIGNING_SECRET
+[vars]
+WORDS_URL = "https://cravingpixels.github.io/treccani-parola-del-giorno/data/words.json"

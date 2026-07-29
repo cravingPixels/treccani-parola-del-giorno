@@ -13,6 +13,7 @@ pay for, no paid tier anywhere. It runs entirely on GitHub Actions and GitHub Pa
 ## What it does
 
 - 🕘 **Posts the word to Slack** each morning (default ~9:00 Italy time, configurable) with its Treccani link and a short definition.
+- 💬 **`/parola` on demand** — type `/parola` for today, `/parola ieri` for yesterday, or `/parola 2026-07-15` (also `15/07/2026`) for any past day.
 - 🗄️ **Archives every word** so you can look up *"what was the word on 15 July?"* at any time.
 - 🔎 **Browsable history** — a small static page with instant client-side search by word or date.
 
@@ -23,12 +24,17 @@ pay for, no paid tier anywhere. It runs entirely on GitHub Actions and GitHub Pa
                  │
                  ▼
         scraper/scrape.py
-        ├─ capture:  is the homepage word NEW? ──► append to docs/data/words.json
-        └─ notify:   at/after POST_HOUR, once/day ──► Slack Incoming Webhook
-                 │
-                 ▼
-        GitHub Pages (docs/index.html) ..... searchable history site
+        ├─ capture:  is the homepage word NEW? ──► append to docs/data/words.json ──┐
+        └─ notify:   at/after POST_HOUR, once/day ──► Slack Incoming Webhook         │
+                                                                                     ▼
+   /parola in Slack ──► Cloudflare Worker (worker/) ──reads──► GitHub Pages (docs/) ─┤
+                                                                                     │
+        GitHub Pages (docs/index.html) ..... searchable history site ◄───────────────┘
 ```
+
+The **daily post** is push-based (GitHub Actions → webhook). The **`/parola` command**
+is pull-based: a tiny Cloudflare Worker verifies the Slack request signature, reads the
+public `words.json`, and replies — both read from the same archive, so they never drift.
 
 Treccani flips the word at an unknown (non-midnight) time, so instead of guessing,
 the workflow **polls through the morning** and the scraper does two independent things:
@@ -51,6 +57,7 @@ The updated archive is committed back to the repo; GitHub Pages serves it — no
 | Archive storage  | a JSON file in the repo        | free |
 | History website  | GitHub Pages                   | free |
 | Slack delivery    | Incoming Webhook               | free |
+| `/parola` command | Cloudflare Worker              | free (100k req/day, no card) |
 
 A nice side effect: the daily commit also keeps the scheduled workflow from being
 auto-disabled for inactivity. Cron runs in UTC, so the schedule (`*/30 3-11 * * *`)
@@ -61,8 +68,10 @@ the real 9 AM (Europe/Rome) moment to post.
 
 | Name | Where | Sensitive? | Purpose |
 |------|-------|-----------|---------|
-| `SLACK_WEBHOOK_URL` | repo **Secret** | **Yes** — treat as a password | Target channel. Never committed; encrypted; not shown in logs. The channel identity is encoded inside this URL, so nothing else about your channel lives in the repo. |
+| `SLACK_WEBHOOK_URL` | repo **Secret** | **Yes** — treat as a password | Target channel for the daily post. Never committed; encrypted; not in logs. The channel identity is encoded inside this URL, so nothing else about your channel lives in the repo. |
 | `POST_HOUR` | repo **Variable** | No | Hour (Europe/Rome, 0–23) to post at. Defaults to `9` if unset. Set it in repo Settings, not in code. |
+| `SLACK_SIGNING_SECRET` | Cloudflare Worker **secret** | **Yes** | Lets the Worker verify that `/parola` requests really come from Slack. Set with `wrangler secret put`, never committed. |
+| `WORDS_URL` | Worker var (`wrangler.toml`) | No | Public archive URL the Worker reads. |
 
 Nothing that identifies your Slack workspace or channel is stored in the repository —
 the public repo contains only the (public) Treccani words.
@@ -77,40 +86,70 @@ it can't be extracted, the word and link are still posted. Because the archive i
 only record of past words (Treccani exposes no historical feed), the polling schedule
 is designed so a delayed or missed run doesn't drop a day — the next run captures it.
 
-## Setup
+## Setup — adding the app to your Slack workspace
 
-### 1. Connect Slack
+> **Need admin?** Installing an app into a company workspace usually needs a Workspace
+> Owner / admin to approve it. You can build and test *everything* first in a **free
+> personal Slack workspace** (create one at <https://slack.com/create> — you're the admin
+> there), then repeat step 3 in the company workspace once approved.
 
-You need permission to install an app into your Slack workspace. (No admin rights?
-Spin up a **free personal Slack workspace** — you're the admin there — and test with that.)
+### 1. Enable GitHub Pages (the archive the app reads)
 
-1. Go to <https://api.slack.com/apps> → **Create New App** → **From an app manifest**,
-   and paste [`slack-app-manifest.yaml`](slack-app-manifest.yaml).
-2. Enable **Incoming Webhooks**, add one to your target channel, and copy the URL.
-3. Store it as a repository secret (paste the URL when prompted):
+Repo **Settings → Pages → Source: `main` / `/docs`**. Confirm
+`https://cravingpixels.github.io/treccani-parola-del-giorno/data/words.json` loads.
+
+### 2. Deploy the `/parola` command (Cloudflare Worker)
+
+Free, no credit card. From the `worker/` folder:
+
+```bash
+cd worker
+npx wrangler login          # opens the browser once
+npx wrangler deploy         # prints your Worker URL, e.g. https://treccani-parola-del-giorno.<you>.workers.dev/
+```
+
+Copy that Worker URL — you'll paste it into the manifest in the next step. (You'll set
+its `SLACK_SIGNING_SECRET` in step 4, once the app exists.)
+
+### 3. Create the Slack app and install it
+
+1. In [`slack-app-manifest.yaml`](slack-app-manifest.yaml), replace the placeholder
+   `slash_commands.url` with your Worker URL from step 2.
+2. Go to <https://api.slack.com/apps> → **Create New App** → **From an app manifest** →
+   pick your workspace → paste the manifest → **Create**.
+3. Left sidebar → **Incoming Webhooks** → toggle **On** → **Add New Webhook to Workspace**
+   → choose the channel → **Allow**.
+   *(In a restricted company workspace, this is where an admin-approval request is sent —
+   the app isn't live until they approve.)*
+4. Copy the generated **Webhook URL** and store it in the repo:
    ```bash
-   gh secret set SLACK_WEBHOOK_URL
+   gh secret set SLACK_WEBHOOK_URL     # paste the webhook URL when prompted
    ```
 
-### 2. (Optional) Choose the post time
+### 4. Give the Worker the signing secret
 
-Defaults to 9 AM Europe/Rome. To change it, set a repository **variable**:
+In the Slack app → **Basic Information → App Credentials → Signing Secret** → copy it, then:
+
+```bash
+cd worker
+npx wrangler secret put SLACK_SIGNING_SECRET   # paste the signing secret
+```
+
+### 5. (Optional) Choose the post time
+
+Defaults to 9 AM Europe/Rome. To change it:
 
 ```bash
 gh variable set POST_HOUR --body 8    # e.g. post at 08:00 Italy time
 ```
 
-### 3. Enable GitHub Pages
+### Done
 
-Settings → **Pages** → Source: `main` branch, `/docs` folder.
-
-### 4. Done
-
-The schedule is already active. To post immediately:
-
-```bash
-gh workflow run daily.yml -f force=true
-```
+- **Daily post** — the schedule is already active; to fire one now:
+  ```bash
+  gh workflow run daily.yml -f force=true
+  ```
+- **On demand** — in Slack: `/parola`, `/parola ieri`, `/parola 2026-07-15`.
 
 ## Local development
 
@@ -131,12 +170,15 @@ python scrape.py --dry-run            # scrape and print the Slack payload; no w
 
 ```
 .github/workflows/daily.yml   # the scheduled scrape → post → commit job
-.github/workflows/test.yml    # runs the tests on every push / PR
+.github/workflows/test.yml    # runs Python + Worker tests on every push / PR
 scraper/scrape.py             # fetch, parse, store, post
 scraper/tests/                # parser + storage tests (with a saved homepage fixture)
+worker/src/                   # Cloudflare Worker for the /parola slash command
+worker/test/                  # Worker tests (signature verification, date parsing, lookup)
+worker/wrangler.toml          # Worker deploy config
 docs/index.html               # the searchable history site (GitHub Pages)
 docs/data/words.json          # the archive
-slack-app-manifest.yaml       # one-click Slack app definition
+slack-app-manifest.yaml       # one-click Slack app definition (webhook + slash command)
 ```
 
 ## A note on scraping & copyright

@@ -1,22 +1,37 @@
 # Slack app manifest — create the app in one click at:
 #   https://api.slack.com/apps  →  "Create New App"  →  "From an app manifest"
-# Only an Incoming Webhook is needed (the daily post). No bot, no slash command,
-# no public backend. After creating, enable Incoming Webhooks, "Add New Webhook
-# to Workspace", pick a channel, and copy the URL into the repo secret
-# SLACK_WEBHOOK_URL. Installing into a restricted (corporate) workspace still
+#
+# This app has two features:
+#   1. Incoming Webhook  — the daily automated post (GitHub Actions posts to it).
+#   2. Slash command /parola — on-demand lookup, backed by the Cloudflare Worker
+#      in ./worker. IMPORTANT: replace the url below with your deployed Worker URL
+#      (e.g. https://treccani-parola-del-giorno.<subdomain>.workers.dev/) before
+#      creating the app, or edit it later under Features → Slash Commands.
+#
+# After creating: enable Incoming Webhooks → "Add New Webhook to Workspace" → pick a
+# channel → copy the URL into the repo secret SLACK_WEBHOOK_URL. Then copy the app's
+# Signing Secret (Basic Information) into the Worker (wrangler secret put
+# SLACK_SIGNING_SECRET). Installing into a restricted (corporate) workspace still
 # requires a Workspace Owner / app-manager to approve.
 display_information:
   name: Parola del giorno
-  description: Posts Treccani's word of the day to a channel each morning.
+  description: Treccani's word of the day — a daily post plus /parola on-demand lookup.
   background_color: "#7a1f1f"
 features:
   bot_user:
     display_name: parola-del-giorno
     always_online: false
+  slash_commands:
+    - command: /parola
+      url: https://REPLACE-WITH-YOUR-WORKER.workers.dev/
+      description: Mostra la parola del giorno (oggi, ieri o una data)
+      usage_hint: "[ieri | 2026-07-15]"
+      should_escape: false
 oauth_config:
   scopes:
     bot:
       - incoming-webhook
+      - commands
 settings:
   org_deploy_enabled: false
   socket_mode_enabled: false

@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "scraper/**"
+      - "worker/**"
       - ".github/workflows/test.yml"
   pull_request:
   workflow_dispatch:
@@ -18,3 +19,12 @@ jobs:
           python-version: "3.11"
       - run: pip install -r scraper/requirements.txt pytest
       - run: cd scraper && python -m pytest -q
+
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - run: cd worker && node --test
